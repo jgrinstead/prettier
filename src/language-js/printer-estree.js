@@ -4046,6 +4046,7 @@ function printMemberChain(path, options, print) {
   // group until we has seen a CallExpression in the past and reach a
   // MemberExpression
   let hasSeenCallExpression = false;
+  let isPromiseChain = false;
   for (; i < printedNodes.length; ++i) {
     if (hasSeenCallExpression && isMemberish(printedNodes[i].node)) {
       // [0] should be appended at the end of the group instead of the
@@ -4061,6 +4062,17 @@ function printMemberChain(path, options, print) {
       groups.push(currentGroup);
       currentGroup = [];
       hasSeenCallExpression = false;
+    }
+
+    if (
+      printedNodes[i].node.type === "CallExpression" &&
+      printedNodes[i].node.callee.type === "MemberExpression" &&
+      printedNodes[i].node.arguments.length &&
+      /FunctionExpression/.test(printedNodes[i].node.arguments[0].type) &&
+      printedNodes[i].node.callee.property.type === "Identifier" &&
+      /^(then|catch|finally)$/.test(printedNodes[i].node.callee.property.name)
+    ) {
+      isPromiseChain = true;
     }
 
     if (printedNodes[i].node.type === "CallExpression") {
@@ -4139,7 +4151,7 @@ function printMemberChain(path, options, print) {
 
   // If we only have a single `.`, we shouldn't do anything fancy and just
   // render everything concatenated together.
-  if (groups.length <= cutoff && !hasComment) {
+  if (groups.length <= cutoff && !hasComment && !isPromiseChain) {
     return group(oneLine);
   }
 
@@ -4170,6 +4182,7 @@ function printMemberChain(path, options, print) {
   // If the last group is a function it's okay to inline if it fits.
   if (
     hasComment ||
+    isPromiseChain ||
     callExpressionCount >= 3 ||
     printedGroups.slice(0, -1).some(willBreak)
   ) {
