@@ -274,15 +274,13 @@ function formatTernaryOperator(path, options, print, operatorOptions) {
     );
   }
 
-  const lessTabs = options.tabWidth > 2;
-
   // In JSX mode, we want a whole chain of ConditionalExpressions to all
   // break if any of them break. That means we should only group around the
   // outer-most ConditionalExpression.
   const maybeGroup = doc =>
     jsxMode
       ? parent === firstNonConditionalParent ? group(doc) : doc
-      : (lessTabs ? doc : group(doc));
+      : group(doc); // Always group in normal mode.
 
   // Break the closing paren to keep the chain right after it:
   // (a
@@ -292,16 +290,11 @@ function formatTernaryOperator(path, options, print, operatorOptions) {
   const breakClosingParen =
     !jsxMode && parent.type === "MemberExpression" && !parent.computed;
 
-  const concatParts =
-    forceNoIndent
-      ? concat(parts)
-      : (lessTabs ? indent(group(concat(parts))) : indent(concat(parts)));
-
   return maybeGroup(
     concat(
       [].concat(
         operatorOpts.beforeParts(),
-        concatParts,
+        forceNoIndent ? concat(parts) : indent(concat(parts)),
         operatorOpts.afterParts(breakClosingParen)
       )
     )
