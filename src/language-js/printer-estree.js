@@ -274,13 +274,15 @@ function formatTernaryOperator(path, options, print, operatorOptions) {
     );
   }
 
+  const lessTabs = options.tabWidth > 2;
+
   // In JSX mode, we want a whole chain of ConditionalExpressions to all
   // break if any of them break. That means we should only group around the
   // outer-most ConditionalExpression.
   const maybeGroup = doc =>
     jsxMode
       ? parent === firstNonConditionalParent ? group(doc) : doc
-      : group(doc); // Always group in normal mode.
+      : (lessTabs ? doc : group(doc));
 
   // Break the closing paren to keep the chain right after it:
   // (a
@@ -290,11 +292,16 @@ function formatTernaryOperator(path, options, print, operatorOptions) {
   const breakClosingParen =
     !jsxMode && parent.type === "MemberExpression" && !parent.computed;
 
+  const concatParts =
+    forceNoIndent
+      ? concat(parts)
+      : (lessTabs ? indent(group(concat(parts))) : indent(concat(parts)));
+
   return maybeGroup(
     concat(
       [].concat(
         operatorOpts.beforeParts(),
-        forceNoIndent ? concat(parts) : indent(concat(parts)),
+        concatParts,
         operatorOpts.afterParts(breakClosingParen)
       )
     )
@@ -304,6 +311,7 @@ function formatTernaryOperator(path, options, print, operatorOptions) {
 function printPathNoParens(path, options, print, args) {
   const n = path.getValue();
   const semi = options.semi ? ";" : "";
+  const lessTabs = options.tabWidth > 2;
 
   if (!n) {
     return "";
@@ -1630,7 +1638,7 @@ function printPathNoParens(path, options, print, args) {
         path.call(print, "discriminant"),
         ") {",
         n.cases.length > 0
-          ? indent(
+          ? (lessTabs ? x => x : indent)(
               concat([
                 hardline,
                 join(
@@ -3881,6 +3889,8 @@ function printBindExpressionCallee(path, options, print) {
 // MemberExpression and CallExpression. We need to traverse the AST
 // and make groups out of it to print it in the desired way.
 function printMemberChain(path, options, print) {
+  const lessTabs = options.tabWidth > 2;
+
   // The first phase is to linearize the AST by traversing it down.
   //
   //   a().b()
@@ -4108,9 +4118,10 @@ function printMemberChain(path, options, print) {
     if (groups.length === 0) {
       return "";
     }
-    return indent(
-      group(concat([hardline, join(hardline, groups.map(printGroup))]))
-    );
+
+    const x = group(concat([hardline, join(hardline, groups.map(printGroup))]));
+
+    return lessTabs ? x : indent(x);
   }
 
   const printedGroups = groups.map(printGroup);
