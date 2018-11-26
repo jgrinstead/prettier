@@ -2,11 +2,14 @@
 
 const fs = require("fs");
 const extname = require("path").extname;
-const prettier = require("./require_prettier");
-const massageAST = require("../src/common/clean-ast.js").massageAST;
-const normalizeOptions = require("../src/main/options").normalize;
+const raw = require("jest-snapshot-serializer-raw").wrap;
 
 const AST_COMPARE = process.env["AST_COMPARE"];
+const TEST_STANDALONE = process.env["TEST_STANDALONE"];
+
+const prettier = !TEST_STANDALONE
+  ? require("prettier/local")
+  : require("prettier/standalone");
 
 function run_spec(dirname, parsers, options) {
   /* instabul ignore if */
@@ -15,6 +18,15 @@ function run_spec(dirname, parsers, options) {
   }
 
   fs.readdirSync(dirname).forEach(filename => {
+    // We need to have a skipped test with the same name of the snapshots,
+    // so Jest doesn't mark them as obsolete.
+    if (TEST_STANDALONE && parsers.some(skipStandalone)) {
+      parsers.forEach(parser =>
+        test.skip(`${filename} - ${parser}-verify`, () => {})
+      );
+      return;
+    }
+
     const path = dirname + "/" + filename;
     if (
       extname(filename) !== ".snap" &&
@@ -22,8 +34,9 @@ function run_spec(dirname, parsers, options) {
       filename[0] !== "." &&
       filename !== "jsfmt.spec.js"
     ) {
-      let rangeStart = 0;
-      let rangeEnd = Infinity;
+      let rangeStart;
+      let rangeEnd;
+      let cursorOffset;
       const source = read(path)
         .replace(/\r\n/g, "\n")
         .replace("<<<PRETTIER_RANGE_START>>>", (match, offset) => {
@@ -35,48 +48,59 @@ function run_spec(dirname, parsers, options) {
           return "";
         });
 
-      const mergedOptions = Object.assign(mergeDefaultOptions(options || {}), {
-        parser: parsers[0],
-        rangeStart: rangeStart,
-        rangeEnd: rangeEnd
-      });
-      const output = prettyprint(source, path, mergedOptions);
-      test(`${filename} - ${mergedOptions.parser}-verify`, () => {
-        expect(
-          raw(source + "~".repeat(mergedOptions.printWidth) + "\n" + output)
-        ).toMatchSnapshot(filename);
+      const input = source.replace("<|>", (match, offset) => {
+        cursorOffset = offset;
+        return "";
       });
 
-      parsers.slice(1).forEach(parserName => {
-        test(`${filename} - ${parserName}-verify`, () => {
-          const verifyOptions = Object.assign(mergedOptions, {
-            parser: parserName
-          });
-          const verifyOutput = prettyprint(source, path, verifyOptions);
+      const baseOptions = Object.assign(mergeDefaultOptions(options || {}), {
+        rangeStart,
+        rangeEnd,
+        cursorOffset
+      });
+      const mainOptions = Object.assign({}, baseOptions, {
+        parser: parsers[0]
+      });
+      const output = prettyprint(input, path, mainOptions);
+      test(filename, () => {
+        expect(
+          raw(
+            createSnapshot(
+              source,
+              output,
+              Object.assign({}, baseOptions, { parsers })
+            )
+          )
+        ).toMatchSnapshot();
+      });
+
+      parsers.slice(1).forEach(parser => {
+        const verifyOptions = Object.assign({}, mainOptions, { parser });
+        test(`${filename} - ${parser}-verify`, () => {
+          const verifyOutput = prettyprint(input, path, verifyOptions);
           expect(output).toEqual(verifyOutput);
         });
       });
 
       if (AST_COMPARE) {
-        const normalizedOptions = normalizeOptions(mergedOptions);
-        const ast = parse(source, mergedOptions);
-        const astMassaged = massageAST(ast, normalizedOptions);
-        let ppastMassaged;
-        let pperr = null;
-        try {
-          const ppast = parse(
-            prettyprint(source, path, mergedOptions),
-            mergedOptions
-          );
-          ppastMassaged = massageAST(ppast, normalizedOptions);
-        } catch (e) {
-          pperr = e.stack;
-        }
+        test(`${path} parse`, () => {
+          const compareOptions = Object.assign({}, mainOptions);
+          delete compareOptions.cursorOffset;
+          const astMassaged = parse(input, compareOptions);
+          let ppastMassaged = undefined;
 
-        test(path + " parse", () => {
-          expect(pperr).toBe(null);
+          expect(() => {
+            ppastMassaged = parse(
+              prettyprint(input, path, compareOptions)
+                // \r has been replaced with /*CR*/ to test presence of CR in jest snapshots;
+                // reverting this to get the right AST
+                .replace(/\/\*CR\*\//g, "\r"),
+              compareOptions
+            );
+          }).not.toThrow();
+
           expect(ppastMassaged).toBeDefined();
-          if (!ast.errors || ast.errors.length === 0) {
+          if (!astMassaged.errors || astMassaged.errors.length === 0) {
             expect(astMassaged).toEqual(ppastMassaged);
           }
         });
@@ -87,36 +111,12 @@ function run_spec(dirname, parsers, options) {
 
 global.run_spec = run_spec;
 
-function stripLocation(ast) {
-  if (Array.isArray(ast)) {
-    return ast.map(e => stripLocation(e));
-  }
-  if (typeof ast === "object") {
-    const newObj = {};
-    for (const key in ast) {
-      if (
-        key === "loc" ||
-        key === "range" ||
-        key === "raw" ||
-        key === "comments" ||
-        key === "parent" ||
-        key === "prev"
-      ) {
-        continue;
-      }
-      newObj[key] = stripLocation(ast[key]);
-    }
-    return newObj;
-  }
-  return ast;
-}
-
 function parse(string, opts) {
-  return stripLocation(prettier.__debug.parse(string, opts).ast);
+  return prettier.__debug.parse(string, opts, /* massage */ true).ast;
 }
 
 function prettyprint(src, filename, options) {
-  return prettier.format(
+  const result = prettier.formatWithCursor(
     src,
     Object.assign(
       {
@@ -125,22 +125,24 @@ function prettyprint(src, filename, options) {
       options
     )
   );
+  if (options.cursorOffset >= 0) {
+    result.formatted =
+      result.formatted.slice(0, result.cursorOffset) +
+      "<|>" +
+      result.formatted.slice(result.cursorOffset);
+  }
+
+  // \r is trimmed from jest snapshots by default;
+  // manually replacing this character with /*CR*/ to test its true presence
+  return result.formatted.replace(/\r/g, "/*CR*/");
 }
 
 function read(filename) {
   return fs.readFileSync(filename, "utf8");
 }
 
-/**
- * Wraps a string in a marker object that is used by `./raw-serializer.js` to
- * directly print that string in a snapshot without escaping all double quotes.
- * Backticks will still be escaped.
- */
-function raw(string) {
-  if (typeof string !== "string") {
-    throw new Error("Raw snapshots have to be strings.");
-  }
-  return { [Symbol.for("raw")]: string };
+function skipStandalone(/* parser */) {
+  return false;
 }
 
 function mergeDefaultOptions(parserConfig) {
@@ -150,4 +152,58 @@ function mergeDefaultOptions(parserConfig) {
     },
     parserConfig
   );
+}
+
+function createSnapshot(input, output, options) {
+  const separatorWidth = 80;
+  const printWidthIndicator =
+    options.printWidth > 0 && Number.isFinite(options.printWidth)
+      ? " ".repeat(options.printWidth) + "| printWidth"
+      : [];
+  return []
+    .concat(
+      printSeparator(separatorWidth, "options"),
+      printOptions(
+        omit(
+          options,
+          k => k === "rangeStart" || k === "rangeEnd" || k === "cursorOffset"
+        )
+      ),
+      printWidthIndicator,
+      printSeparator(separatorWidth, "input"),
+      input,
+      printSeparator(separatorWidth, "output"),
+      output,
+      printSeparator(separatorWidth)
+    )
+    .join("\n");
+}
+
+function printSeparator(width, description) {
+  description = description || "";
+  const leftLength = Math.floor((width - description.length) / 2);
+  const rightLength = width - leftLength - description.length;
+  return "=".repeat(leftLength) + description + "=".repeat(rightLength);
+}
+
+function printOptions(options) {
+  const keys = Object.keys(options).sort();
+  return keys.map(key => `${key}: ${stringify(options[key])}`).join("\n");
+  function stringify(value) {
+    return value === Infinity
+      ? "Infinity"
+      : Array.isArray(value)
+      ? `[${value.map(v => JSON.stringify(v)).join(", ")}]`
+      : JSON.stringify(value);
+  }
+}
+
+function omit(obj, fn) {
+  return Object.keys(obj).reduce((reduced, key) => {
+    const value = obj[key];
+    if (!fn(key, value)) {
+      reduced[key] = value;
+    }
+    return reduced;
+  }, {});
 }

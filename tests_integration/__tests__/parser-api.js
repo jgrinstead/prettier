@@ -1,6 +1,6 @@
 "use strict";
 
-const prettier = require("../../tests_config/require_prettier");
+const prettier = require("prettier/local");
 const runPrettier = require("../runPrettier");
 
 test("allows custom parser provided as object", () => {
@@ -31,6 +31,8 @@ test("allows usage of prettier's supported parsers", () => {
 
 describe("allows passing a string to resolve a parser", () => {
   runPrettier("./custom-parsers/", [
+    "--end-of-line",
+    "lf",
     "./custom-rename-input.js",
     "--parser",
     "./custom-rename-parser"

@@ -3,28 +3,9 @@
 const stringWidth = require("string-width");
 const emojiRegex = require("emoji-regex")();
 const escapeStringRegexp = require("escape-string-regexp");
-const getCjkRegex = require("cjk-regex");
-const getUnicodeRegex = require("unicode-regex");
 
-const cjkPattern = getCjkRegex().source;
-
-// http://spec.commonmark.org/0.25/#ascii-punctuation-character
-const asciiPunctuationCharRange = escapeStringRegexp(
-  "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
-);
-
-// http://spec.commonmark.org/0.25/#punctuation-character
-const punctuationCharRange = `${asciiPunctuationCharRange}${getUnicodeRegex([
-  "Pc",
-  "Pd",
-  "Pe",
-  "Pf",
-  "Pi",
-  "Po",
-  "Ps"
-]).source.slice(1, -1)}`; // remove bracket expression `[` and `]`
-
-const punctuationRegex = new RegExp(`[${punctuationCharRange}]`);
+// eslint-disable-next-line no-control-regex
+const notAsciiRegex = /[^\x20-\x7F]/;
 
 function isExportDeclaration(node) {
   if (node) {
@@ -215,9 +196,8 @@ function isNextLineEmpty(text, node, locEnd) {
   return isNextLineEmptyAfterIndex(text, locEnd(node));
 }
 
-function getNextNonSpaceNonCommentCharacterIndex(text, node, locEnd) {
+function getNextNonSpaceNonCommentCharacterIndexWithStartIndex(text, idx) {
   let oldIdx = null;
-  let idx = locEnd(node);
   while (idx !== oldIdx) {
     oldIdx = idx;
     idx = skipSpaces(text, idx);
@@ -226,6 +206,13 @@ function getNextNonSpaceNonCommentCharacterIndex(text, node, locEnd) {
     idx = skipNewline(text, idx);
   }
   return idx;
+}
+
+function getNextNonSpaceNonCommentCharacterIndex(text, node, locEnd) {
+  return getNextNonSpaceNonCommentCharacterIndexWithStartIndex(
+    text,
+    locEnd(node)
+  );
 }
 
 function getNextNonSpaceNonCommentCharacter(text, node, locEnd) {
@@ -238,18 +225,6 @@ function hasSpaces(text, index, opts) {
   opts = opts || {};
   const idx = skipSpaces(text, opts.backwards ? index - 1 : index, opts);
   return idx !== index;
-}
-
-// Super inefficient, needs to be cached.
-function lineColumnToIndex(lineColumn, text) {
-  let index = 0;
-  for (let i = 0; i < lineColumn.line - 1; ++i) {
-    index = text.indexOf("\n", index) + 1;
-    if (index === -1) {
-      return -1;
-    }
-  }
-  return index + lineColumn.column;
 }
 
 function setLocStart(node, index) {
@@ -333,6 +308,16 @@ function shouldFlatten(parentOp, nodeOp) {
     return false;
   }
 
+  // x * y / z --> (x * y) / z
+  // x / y * z --> (x / y) * z
+  if (
+    nodeOp !== parentOp &&
+    multiplicativeOperators[nodeOp] &&
+    multiplicativeOperators[parentOp]
+  ) {
+    return false;
+  }
+
   // x << y << z --> (x << y) << z
   if (bitshiftOperators[parentOp] && bitshiftOperators[nodeOp]) {
     return false;
@@ -350,54 +335,62 @@ function isBitwiseOperator(operator) {
   );
 }
 
-// Tests if an expression starts with `{`, or (if forbidFunctionAndClass holds) `function` or `class`.
-// Will be overzealous if there's already necessary grouping parentheses.
-function startsWithNoLookaheadToken(node, forbidFunctionAndClass) {
+// Tests if an expression starts with `{`, or (if forbidFunctionClassAndDoExpr
+// holds) `function`, `class`, or `do {}`. Will be overzealous if there's
+// already necessary grouping parentheses.
+function startsWithNoLookaheadToken(node, forbidFunctionClassAndDoExpr) {
   node = getLeftMost(node);
   switch (node.type) {
-    // Hack. Remove after https://github.com/eslint/typescript-eslint-parser/issues/331
-    case "ObjectPattern":
-      return !forbidFunctionAndClass;
     case "FunctionExpression":
     case "ClassExpression":
-      return forbidFunctionAndClass;
+    case "DoExpression":
+      return forbidFunctionClassAndDoExpr;
     case "ObjectExpression":
       return true;
     case "MemberExpression":
-      return startsWithNoLookaheadToken(node.object, forbidFunctionAndClass);
+      return startsWithNoLookaheadToken(
+        node.object,
+        forbidFunctionClassAndDoExpr
+      );
     case "TaggedTemplateExpression":
       if (node.tag.type === "FunctionExpression") {
         // IIFEs are always already parenthesized
         return false;
       }
-      return startsWithNoLookaheadToken(node.tag, forbidFunctionAndClass);
+      return startsWithNoLookaheadToken(node.tag, forbidFunctionClassAndDoExpr);
     case "CallExpression":
       if (node.callee.type === "FunctionExpression") {
         // IIFEs are always already parenthesized
         return false;
       }
-      return startsWithNoLookaheadToken(node.callee, forbidFunctionAndClass);
+      return startsWithNoLookaheadToken(
+        node.callee,
+        forbidFunctionClassAndDoExpr
+      );
     case "ConditionalExpression":
-      return startsWithNoLookaheadToken(node.test, forbidFunctionAndClass);
+      return startsWithNoLookaheadToken(
+        node.test,
+        forbidFunctionClassAndDoExpr
+      );
     case "UpdateExpression":
       return (
         !node.prefix &&
-        startsWithNoLookaheadToken(node.argument, forbidFunctionAndClass)
+        startsWithNoLookaheadToken(node.argument, forbidFunctionClassAndDoExpr)
       );
     case "BindExpression":
       return (
         node.object &&
-        startsWithNoLookaheadToken(node.object, forbidFunctionAndClass)
+        startsWithNoLookaheadToken(node.object, forbidFunctionClassAndDoExpr)
       );
     case "SequenceExpression":
       return startsWithNoLookaheadToken(
         node.expressions[0],
-        forbidFunctionAndClass
+        forbidFunctionClassAndDoExpr
       );
     case "TSAsExpression":
       return startsWithNoLookaheadToken(
         node.expression,
-        forbidFunctionAndClass
+        forbidFunctionClassAndDoExpr
       );
     default:
       return false;
@@ -411,29 +404,6 @@ function getLeftMost(node) {
   return node;
 }
 
-function hasBlockComments(node) {
-  return node.comments && node.comments.some(isBlockComment);
-}
-
-function isBlockComment(comment) {
-  return comment.type === "Block" || comment.type === "CommentBlock";
-}
-
-function hasClosureCompilerTypeCastComment(text, node, locEnd) {
-  // https://github.com/google/closure-compiler/wiki/Annotating-Types#type-casts
-  // Syntax example: var x = /** @type {string} */ (fruit);
-  return (
-    node.comments &&
-    node.comments.some(
-      comment =>
-        comment.leading &&
-        isBlockComment(comment) &&
-        comment.value.match(/^\*\s*@type\s*{[^}]+}\s*$/) &&
-        getNextNonSpaceNonCommentCharacter(text, comment, locEnd) === "("
-    )
-  );
-}
-
 function getAlignmentSize(value, tabWidth, startIndex) {
   startIndex = startIndex || 0;
 
@@ -444,7 +414,7 @@ function getAlignmentSize(value, tabWidth, startIndex) {
       // multiple of tabWidth:
       // 0 -> 4, 1 -> 4, 2 -> 4, 3 -> 4
       // 4 -> 8, 5 -> 8, 6 -> 8, 7 -> 8 ...
-      size = size + tabWidth - size % tabWidth;
+      size = size + tabWidth - (size % tabWidth);
     } else {
       size++;
     }
@@ -466,7 +436,7 @@ function getIndentSize(value, tabWidth) {
   );
 }
 
-function printString(raw, options, isDirectiveLiteral) {
+function getPreferredQuote(raw, preferredQuote) {
   // `rawContent` is the string exactly like it appeared in the input source
   // code, without its enclosing quotes.
   const rawContent = raw.slice(1, -1);
@@ -474,17 +444,14 @@ function printString(raw, options, isDirectiveLiteral) {
   const double = { quote: '"', regex: /"/g };
   const single = { quote: "'", regex: /'/g };
 
-  const preferred = options.singleQuote ? single : double;
+  const preferred = preferredQuote === "'" ? single : double;
   const alternate = preferred === single ? double : single;
 
-  let shouldUseAlternateQuote = false;
-  let canChangeDirectiveQuotes = false;
+  let result = preferred.quote;
 
   // If `rawContent` contains at least one of the quote preferred for enclosing
   // the string, we might want to enclose with the alternate quote instead, to
   // minimize the number of escaped quotes.
-  // Also check for the alternate quote, to determine if we're allowed to swap
-  // the quotes on a DirectiveLiteral.
   if (
     rawContent.includes(preferred.quote) ||
     rawContent.includes(alternate.quote)
@@ -492,15 +459,31 @@ function printString(raw, options, isDirectiveLiteral) {
     const numPreferredQuotes = (rawContent.match(preferred.regex) || []).length;
     const numAlternateQuotes = (rawContent.match(alternate.regex) || []).length;
 
-    shouldUseAlternateQuote = numPreferredQuotes > numAlternateQuotes;
-  } else {
-    canChangeDirectiveQuotes = true;
+    result =
+      numPreferredQuotes > numAlternateQuotes
+        ? alternate.quote
+        : preferred.quote;
   }
+
+  return result;
+}
+
+function printString(raw, options, isDirectiveLiteral) {
+  // `rawContent` is the string exactly like it appeared in the input source
+  // code, without its enclosing quotes.
+  const rawContent = raw.slice(1, -1);
+
+  // Check for the alternate quote, to determine if we're allowed to swap
+  // the quotes on a DirectiveLiteral.
+  const canChangeDirectiveQuotes =
+    !rawContent.includes('"') && !rawContent.includes("'");
 
   const enclosingQuote =
     options.parser === "json"
-      ? double.quote
-      : shouldUseAlternateQuote ? alternate.quote : preferred.quote;
+      ? '"'
+      : options.__isInHtmlAttribute
+      ? "'"
+      : getPreferredQuote(raw, options.singleQuote ? "'" : '"');
 
   // Directives are exact code unit sequences, which means that you can't
   // change the escape sequences they use.
@@ -523,7 +506,10 @@ function printString(raw, options, isDirectiveLiteral) {
     !(
       options.parser === "css" ||
       options.parser === "less" ||
-      options.parser === "scss"
+      options.parser === "scss" ||
+      options.parentParser === "html" ||
+      options.parentParser === "vue" ||
+      options.parentParser === "angular"
     )
   );
 }
@@ -598,134 +584,14 @@ function getMaxContinuousCount(str, target) {
   );
 }
 
-function mapDoc(doc, callback) {
-  if (doc.parts) {
-    const parts = doc.parts.map(part => mapDoc(part, callback));
-    return callback(Object.assign({}, doc, { parts }));
-  }
-
-  if (doc.contents) {
-    const contents = mapDoc(doc.contents, callback);
-    return callback(Object.assign({}, doc, { contents }));
-  }
-
-  return callback(doc);
-}
-
-/**
- * split text into whitespaces and words
- * @param {string} text
- * @return {Array<{ type: "whitespace", value: " " | "\n" | "" } | { type: "word", value: string }>}
- */
-function splitText(text) {
-  const KIND_NON_CJK = "non-cjk";
-  const KIND_CJK_CHARACTER = "cjk-character";
-  const KIND_CJK_PUNCTUATION = "cjk-punctuation";
-
-  const nodes = [];
-
-  text
-    .replace(new RegExp(`(${cjkPattern})\n(${cjkPattern})`, "g"), "$1$2")
-    .split(/([ \t\n]+)/)
-    .forEach((token, index, tokens) => {
-      // whitespace
-      if (index % 2 === 1) {
-        nodes.push({
-          type: "whitespace",
-          value: /\n/.test(token) ? "\n" : " "
-        });
-        return;
-      }
-
-      // word separated by whitespace
-
-      if ((index === 0 || index === tokens.length - 1) && token === "") {
-        return;
-      }
-
-      token
-        .split(new RegExp(`(${cjkPattern})`))
-        .forEach((innerToken, innerIndex, innerTokens) => {
-          if (
-            (innerIndex === 0 || innerIndex === innerTokens.length - 1) &&
-            innerToken === ""
-          ) {
-            return;
-          }
-
-          // non-CJK word
-          if (innerIndex % 2 === 0) {
-            if (innerToken !== "") {
-              appendNode({
-                type: "word",
-                value: innerToken,
-                kind: KIND_NON_CJK,
-                hasLeadingPunctuation: punctuationRegex.test(innerToken[0]),
-                hasTrailingPunctuation: punctuationRegex.test(
-                  getLast(innerToken)
-                )
-              });
-            }
-            return;
-          }
-
-          // CJK character
-          appendNode(
-            punctuationRegex.test(innerToken)
-              ? {
-                  type: "word",
-                  value: innerToken,
-                  kind: KIND_CJK_PUNCTUATION,
-                  hasLeadingPunctuation: true,
-                  hasTrailingPunctuation: true
-                }
-              : {
-                  type: "word",
-                  value: innerToken,
-                  kind: KIND_CJK_CHARACTER,
-                  hasLeadingPunctuation: false,
-                  hasTrailingPunctuation: false
-                }
-          );
-        });
-    });
-
-  return nodes;
-
-  function appendNode(node) {
-    const lastNode = getLast(nodes);
-    if (lastNode && lastNode.type === "word") {
-      if (
-        (lastNode.kind === KIND_NON_CJK &&
-          node.kind === KIND_CJK_CHARACTER &&
-          !lastNode.hasTrailingPunctuation) ||
-        (lastNode.kind === KIND_CJK_CHARACTER &&
-          node.kind === KIND_NON_CJK &&
-          !node.hasLeadingPunctuation)
-      ) {
-        nodes.push({ type: "whitespace", value: " " });
-      } else if (
-        !isBetween(KIND_NON_CJK, KIND_CJK_PUNCTUATION) &&
-        // disallow leading/trailing full-width whitespace
-        ![lastNode.value, node.value].some(value => /\u3000/.test(value))
-      ) {
-        nodes.push({ type: "whitespace", value: "" });
-      }
-    }
-    nodes.push(node);
-
-    function isBetween(kind1, kind2) {
-      return (
-        (lastNode.kind === kind1 && node.kind === kind2) ||
-        (lastNode.kind === kind2 && node.kind === kind1)
-      );
-    }
-  }
-}
-
 function getStringWidth(text) {
   if (!text) {
     return 0;
+  }
+
+  // shortcut to avoid needless string `RegExp`s, replacements, and allocations within `string-width`
+  if (!notAsciiRegex.test(text)) {
+    return text.length;
   }
 
   // emojis are considered 2-char width for consistency
@@ -748,21 +614,69 @@ function hasNodeIgnoreComment(node) {
   );
 }
 
-function arrayify(object, keyName) {
-  return Object.keys(object).reduce(
-    (array, key) =>
-      array.concat(Object.assign({ [keyName]: key }, object[key])),
-    []
-  );
+function matchAncestorTypes(path, types, index) {
+  index = index || 0;
+  types = types.slice();
+  while (types.length) {
+    const parent = path.getParentNode(index);
+    const type = types.shift();
+    if (!parent || parent.type !== type) {
+      return false;
+    }
+    index++;
+  }
+  return true;
+}
+
+function addCommentHelper(node, comment) {
+  const comments = node.comments || (node.comments = []);
+  comments.push(comment);
+  comment.printed = false;
+
+  // For some reason, TypeScript parses `// x` inside of JSXText as a comment
+  // We already "print" it via the raw text, we don't need to re-print it as a
+  // comment
+  if (node.type === "JSXText") {
+    comment.printed = true;
+  }
+}
+
+function addLeadingComment(node, comment) {
+  comment.leading = true;
+  comment.trailing = false;
+  addCommentHelper(node, comment);
+}
+
+function addDanglingComment(node, comment) {
+  comment.leading = false;
+  comment.trailing = false;
+  addCommentHelper(node, comment);
+}
+
+function addTrailingComment(node, comment) {
+  comment.leading = false;
+  comment.trailing = true;
+  addCommentHelper(node, comment);
+}
+
+function isWithinParentArrayProperty(path, propertyName) {
+  const node = path.getValue();
+  const parent = path.getParentNode();
+
+  if (parent == null) {
+    return false;
+  }
+
+  if (!Array.isArray(parent[propertyName])) {
+    return false;
+  }
+
+  const key = path.getName();
+  return parent[propertyName][key] === node;
 }
 
 module.exports = {
-  arrayify,
-  punctuationRegex,
-  punctuationCharRange,
   getStringWidth,
-  splitText,
-  mapDoc,
   getMaxContinuousCount,
   getPrecedence,
   shouldFlatten,
@@ -771,10 +685,16 @@ module.exports = {
   getParentExportDeclaration,
   getPenultimate,
   getLast,
+  getNextNonSpaceNonCommentCharacterIndexWithStartIndex,
   getNextNonSpaceNonCommentCharacterIndex,
   getNextNonSpaceNonCommentCharacter,
+  skip,
   skipWhitespace,
   skipSpaces,
+  skipToLineEnd,
+  skipEverythingButNewLine,
+  skipInlineComment,
+  skipTrailingComment,
   skipNewline,
   isNextLineEmptyAfterIndex,
   isNextLineEmpty,
@@ -785,15 +705,17 @@ module.exports = {
   setLocStart,
   setLocEnd,
   startsWithNoLookaheadToken,
-  hasBlockComments,
-  isBlockComment,
-  hasClosureCompilerTypeCastComment,
   getAlignmentSize,
   getIndentSize,
+  getPreferredQuote,
   printString,
   printNumber,
   hasIgnoreComment,
   hasNodeIgnoreComment,
-  lineColumnToIndex,
-  makeString
+  makeString,
+  matchAncestorTypes,
+  addLeadingComment,
+  addDanglingComment,
+  addTrailingComment,
+  isWithinParentArrayProperty
 };
