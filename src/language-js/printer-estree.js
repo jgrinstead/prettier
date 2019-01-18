@@ -4859,7 +4859,7 @@ function printMemberChain(path, options, print) {
       printedNodes[i].node.arguments.length &&
       /FunctionExpression/.test(printedNodes[i].node.arguments[0].type) &&
       printedNodes[i].node.callee.property.type === "Identifier" &&
-      /^(then|catch|finally)$/.test(printedNodes[i].node.callee.property.name)
+      /^(then|catch|finally|finalStep)$/.test(printedNodes[i].node.callee.property.name)
     ) {
       isPromiseChain = true;
     }
