@@ -9,7 +9,13 @@ const { parseIeConditionalComment } = require("./conditional-comment");
 
 function ngHtmlParser(
   input,
-  { recognizeSelfClosing, normalizeTagName, normalizeAttributeName }
+  {
+    recognizeSelfClosing,
+    normalizeTagName,
+    normalizeAttributeName,
+    allowHtmComponentClosingTags,
+    isTagNameCaseSensitive
+  }
 ) {
   const parser = require("angular-html-parser");
   const {
@@ -30,13 +36,15 @@ function ngHtmlParser(
   } = require("angular-html-parser/lib/compiler/src/ml_parser/html_tags");
 
   const { rootNodes, errors } = parser.parse(input, {
-    canSelfClose: recognizeSelfClosing
+    canSelfClose: recognizeSelfClosing,
+    allowHtmComponentClosingTags,
+    isTagNameCaseSensitive
   });
 
   if (errors.length !== 0) {
     const { msg, span } = errors[0];
     const { line, col } = span.start;
-    throw createError(msg, { start: { line: line + 1, column: col } });
+    throw createError(msg, { start: { line: line + 1, column: col + 1 } });
   }
 
   const addType = node => {
@@ -141,7 +149,9 @@ function ngHtmlParser(
 
   const addTagDefinition = node => {
     if (node instanceof Element) {
-      const tagDefinition = getHtmlTagDefinition(node.name);
+      const tagDefinition = getHtmlTagDefinition(
+        isTagNameCaseSensitive ? node.name : node.name.toLowerCase()
+      );
       if (
         !node.namespace ||
         node.namespace === tagDefinition.implicitNamespacePrefix
@@ -255,15 +265,18 @@ function locEnd(node) {
 function createParser({
   recognizeSelfClosing = false,
   normalizeTagName = false,
-  normalizeAttributeName = false
+  normalizeAttributeName = false,
+  allowHtmComponentClosingTags = false,
+  isTagNameCaseSensitive = false
 } = {}) {
   return {
-    preprocess: text => text.replace(/\r\n?/g, "\n"),
     parse: (text, parsers, options) =>
       _parse(text, options, {
         recognizeSelfClosing,
         normalizeTagName,
-        normalizeAttributeName
+        normalizeAttributeName,
+        allowHtmComponentClosingTags,
+        isTagNameCaseSensitive
       }),
     hasPragma,
     astFormat: "html",
@@ -275,10 +288,15 @@ function createParser({
 module.exports = {
   parsers: {
     html: createParser({
+      recognizeSelfClosing: true,
       normalizeTagName: true,
-      normalizeAttributeName: true
+      normalizeAttributeName: true,
+      allowHtmComponentClosingTags: true
     }),
     angular: createParser(),
-    vue: createParser({ recognizeSelfClosing: true })
+    vue: createParser({
+      recognizeSelfClosing: true,
+      isTagNameCaseSensitive: true
+    })
   }
 };

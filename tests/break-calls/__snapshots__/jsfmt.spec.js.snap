@@ -42,6 +42,14 @@ const mapChargeItems = fp.flow(
 
 expect(new LongLongLongLongLongRange([0, 0], [0, 0])).toEqualAtomLongLongLongLongRange(new LongLongLongRange([0, 0], [0, 0]));
 
+["red", "white", "blue", "black", "hotpink", "rebeccapurple"].reduce(
+  (allColors, color) => {
+    return allColors.concat(color);
+  },
+  []
+);
+
+
 =====================================output=====================================
 h(
   f(
@@ -84,6 +92,13 @@ expect(
   new LongLongLongLongLongRange([0, 0], [0, 0])
 ).toEqualAtomLongLongLongLongRange(new LongLongLongRange([0, 0], [0, 0]));
 
+["red", "white", "blue", "black", "hotpink", "rebeccapurple"].reduce(
+  (allColors, color) => {
+    return allColors.concat(color);
+  },
+  []
+);
+
 ================================================================================
 `;
 
@@ -113,6 +128,77 @@ runtimeAgent.getProperties(
     return 1;
   }
 );
+
+================================================================================
+`;
+
+exports[`react.js 1`] = `
+====================================options=====================================
+parsers: ["flow", "typescript"]
+printWidth: 80
+                                                                                | printWidth
+=====================================input======================================
+function helloWorld() {
+  useEffect(() => {
+    // do something
+  }, [props.value])
+  useEffect(() => {
+    // do something
+  }, [props.value, props.value, props.value, props.value, props.value, props.value, props.value, props.value, props.value, props.value, props.value])
+}
+
+function helloWorldWithReact() {
+  React.useEffect(() => {
+    // do something
+  }, [props.value])
+  React.useEffect(() => {
+    // do something
+  }, [props.value, props.value, props.value, props.value, props.value, props.value, props.value, props.value, props.value, props.value, props.value])
+}
+
+
+=====================================output=====================================
+function helloWorld() {
+  useEffect(() => {
+    // do something
+  }, [props.value]);
+  useEffect(() => {
+    // do something
+  }, [
+    props.value,
+    props.value,
+    props.value,
+    props.value,
+    props.value,
+    props.value,
+    props.value,
+    props.value,
+    props.value,
+    props.value,
+    props.value
+  ]);
+}
+
+function helloWorldWithReact() {
+  React.useEffect(() => {
+    // do something
+  }, [props.value]);
+  React.useEffect(() => {
+    // do something
+  }, [
+    props.value,
+    props.value,
+    props.value,
+    props.value,
+    props.value,
+    props.value,
+    props.value,
+    props.value,
+    props.value,
+    props.value,
+    props.value
+  ]);
+}
 
 ================================================================================
 `;

@@ -20,6 +20,7 @@ const {
   softline
 } = builders;
 const {
+  countChars,
   countParents,
   dedentString,
   forceBreakChildren,
@@ -33,15 +34,19 @@ const {
   isTextLikeNode,
   normalizeParts,
   preferHardlineAsLeadingSpaces,
-  replaceDocNewlines,
-  replaceNewlines,
   shouldNotPrintClosingTag,
-  shouldPreserveContent
+  shouldPreserveContent,
+  unescapeQuoteEntities
 } = require("./utils");
+const { replaceEndOfLineWith } = require("../common/util");
 const preprocess = require("./preprocess");
 const assert = require("assert");
 const { insertPragma } = require("./pragma");
-const { printVueFor, printVueSlotScope } = require("./syntax-vue");
+const {
+  printVueFor,
+  printVueSlotScope,
+  isVueEventBindingExpression
+} = require("./syntax-vue");
 const { printImgSrcset } = require("./syntax-attribute");
 
 function concat(parts) {
@@ -80,11 +85,16 @@ function embed(path, print, textToDoc, options) {
               line,
               textToDoc(
                 node.value,
-                options.parser === "angular"
-                  ? { parser: "__ng_interpolation", trailingComma: "none" }
-                  : options.parser === "vue"
-                  ? { parser: "__vue_expression" }
-                  : { parser: "__js_expression" }
+                Object.assign(
+                  {
+                    __isInHtmlInterpolation: true // to avoid unexpected `}}`
+                  },
+                  options.parser === "angular"
+                    ? { parser: "__ng_interpolation", trailingComma: "none" }
+                    : options.parser === "vue"
+                    ? { parser: "__vue_expression" }
+                    : { parser: "__js_expression" }
+                )
               )
             ])
           ),
@@ -103,7 +113,7 @@ function embed(path, print, textToDoc, options) {
 
       // lit-html: html`<my-element obj=${obj}></my-element>`
       if (
-        /^PRETTIER_PLACEHOLDER_\d+$/.test(
+        /^PRETTIER_HTML_PLACEHOLDER_\d+_IN_JS$/.test(
           options.originalText.slice(
             node.valueSpan.start.offset,
             node.valueSpan.end.offset
@@ -124,8 +134,10 @@ function embed(path, print, textToDoc, options) {
         return concat([
           node.rawName,
           '="',
-          mapDoc(embeddedAttributeValueDoc, doc =>
-            typeof doc === "string" ? doc.replace(/"/g, "&quot;") : doc
+          group(
+            mapDoc(embeddedAttributeValueDoc, doc =>
+              typeof doc === "string" ? doc.replace(/"/g, "&quot;") : doc
+            )
           ),
           '"'
         ]);
@@ -139,10 +151,7 @@ function embed(path, print, textToDoc, options) {
           hardline,
           node.value.trim().length === 0
             ? ""
-            : replaceDocNewlines(
-                textToDoc(node.value, { parser: "yaml" }),
-                literalline
-              ),
+            : textToDoc(node.value, { parser: "yaml" }),
           "---"
         ])
       );
@@ -279,7 +288,7 @@ function genericPrint(path, options, print) {
           ? node.value.replace(trailingNewlineRegex, "")
           : node.value;
         return concat([
-          concat(replaceNewlines(value, literalline)),
+          concat(replaceEndOfLineWith(value, literalline)),
           hasTrailingNewline ? hardline : ""
         ]);
       }
@@ -307,28 +316,46 @@ function genericPrint(path, options, print) {
     case "comment": {
       return concat([
         printOpeningTagPrefix(node, options),
-        "<!--",
-        concat(replaceNewlines(node.value, literalline)),
-        "-->",
+        concat(
+          replaceEndOfLineWith(
+            options.originalText.slice(
+              options.locStart(node),
+              options.locEnd(node)
+            ),
+            literalline
+          )
+        ),
         printClosingTagSuffix(node, options)
       ]);
     }
-    case "attribute":
+    case "attribute": {
+      if (node.value === null) {
+        return node.rawName;
+      }
+      const value = unescapeQuoteEntities(node.value);
+      const singleQuoteCount = countChars(value, "'");
+      const doubleQuoteCount = countChars(value, '"');
+      const quote = singleQuoteCount < doubleQuoteCount ? "'" : '"';
       return concat([
         node.rawName,
-        node.value === null
-          ? ""
-          : concat([
-              '="',
-              concat(
-                replaceNewlines(node.value.replace(/"/g, "&quot;"), literalline)
-              ),
-              '"'
-            ])
+        concat([
+          "=",
+          quote,
+          concat(
+            replaceEndOfLineWith(
+              quote === '"'
+                ? value.replace(/"/g, "&quot;")
+                : value.replace(/'/g, "&apos;"),
+              literalline
+            )
+          ),
+          quote
+        ])
       ]);
+    }
     case "yaml":
     case "toml":
-      return node.raw;
+      return concat(replaceEndOfLineWith(node.raw, literalline));
     default:
       throw new Error(`Unexpected node type ${node.type}`);
   }
@@ -447,7 +474,7 @@ function printChildren(path, options, print) {
       return concat(
         [].concat(
           printOpeningTagPrefix(child, options),
-          replaceNewlines(
+          replaceEndOfLineWith(
             options.originalText.slice(
               options.locStart(child) +
                 (child.prev &&
@@ -471,7 +498,7 @@ function printChildren(path, options, print) {
         [].concat(
           printOpeningTagPrefix(child, options),
           group(printOpeningTag(childPath, options, print)),
-          replaceNewlines(
+          replaceEndOfLineWith(
             options.originalText.slice(
               child.startSourceSpan.end.offset +
                 (child.firstChild &&
@@ -594,7 +621,7 @@ function printOpeningTag(path, options, print) {
                     const attr = attrPath.getValue();
                     return hasPrettierIgnoreAttribute(attr)
                       ? concat(
-                          replaceNewlines(
+                          replaceEndOfLineWith(
                             options.originalText.slice(
                               options.locStart(attr),
                               options.locEnd(attr)
@@ -833,6 +860,11 @@ function printClosingTagStartMarker(node, options) {
   switch (node.type) {
     case "ieConditionalComment":
       return "<!";
+    case "element":
+      if (node.hasHtmComponentClosingTag) {
+        return "<//";
+      }
+    // fall through
     default:
       return `</${node.rawName}`;
   }
@@ -863,20 +895,19 @@ function printClosingTagEndMarker(node, options) {
 function getTextValueParts(node, value = node.value) {
   return node.parent.isWhitespaceSensitive
     ? node.parent.isIndentationSensitive
-      ? replaceNewlines(value, literalline)
-      : replaceNewlines(
+      ? replaceEndOfLineWith(value, literalline)
+      : replaceEndOfLineWith(
           dedentString(value.replace(/^\s*?\n|\n\s*?$/g, "")),
           hardline
         )
-    : // non-breaking whitespace: 0xA0
-      join(line, value.split(/[^\S\xA0]+/)).parts;
+    : // https://infra.spec.whatwg.org/#ascii-whitespace
+      join(line, value.split(/[\t\n\f\r ]+/)).parts;
 }
 
 function printEmbeddedAttributeValue(node, originalTextToDoc, options) {
   const isKeyMatched = patterns =>
     new RegExp(patterns.join("|")).test(node.fullName);
-  const getValue = () =>
-    node.value.replace(/&quot;/g, '"').replace(/&apos;/g, "'");
+  const getValue = () => unescapeQuoteEntities(node.value);
 
   let shouldHug = false;
 
@@ -942,17 +973,13 @@ function printEmbeddedAttributeValue(node, originalTextToDoc, options) {
     const jsExpressionBindingPatterns = ["^v-"];
 
     if (isKeyMatched(vueEventBindingPatterns)) {
-      // copied from https://github.com/vuejs/vue/blob/v2.5.17/src/compiler/codegen/events.js#L3-L4
-      const fnExpRE = /^([\w$_]+|\([^)]*?\))\s*=>|^function\s*\(/;
-      const simplePathRE = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*|\['[^']*?']|\["[^"]*?"]|\[\d+]|\[[A-Za-z_$][\w$]*])*$/;
-
-      const value = getValue()
-        // https://github.com/vuejs/vue/blob/v2.5.17/src/compiler/helpers.js#L104
-        .trim();
+      const value = getValue();
       return printMaybeHug(
-        simplePathRE.test(value) || fnExpRE.test(value)
+        isVueEventBindingExpression(value)
           ? textToDoc(value, { parser: "__js_expression" })
-          : stripTrailingHardline(textToDoc(value, { parser: "babylon" }))
+          : stripTrailingHardline(
+              textToDoc(value, { parser: "__vue_event_binding" })
+            )
       );
     }
 
@@ -1003,6 +1030,45 @@ function printEmbeddedAttributeValue(node, originalTextToDoc, options) {
       return printMaybeHug(
         ngTextToDoc(getValue(), { parser: "__ng_directive" })
       );
+    }
+
+    const interpolationRegex = /\{\{([\s\S]+?)\}\}/g;
+    const value = getValue();
+    if (interpolationRegex.test(value)) {
+      const parts = [];
+      value.split(interpolationRegex).forEach((part, index) => {
+        if (index % 2 === 0) {
+          parts.push(concat(replaceEndOfLineWith(part, literalline)));
+        } else {
+          try {
+            parts.push(
+              group(
+                concat([
+                  "{{",
+                  indent(
+                    concat([
+                      line,
+                      ngTextToDoc(part, {
+                        parser: "__ng_interpolation",
+                        __isInHtmlInterpolation: true // to avoid unexpected `}}`
+                      })
+                    ])
+                  ),
+                  line,
+                  "}}"
+                ])
+              )
+            );
+          } catch (e) {
+            parts.push(
+              "{{",
+              concat(replaceEndOfLineWith(part, literalline)),
+              "}}"
+            );
+          }
+        }
+      });
+      return group(concat(parts));
     }
   }
 

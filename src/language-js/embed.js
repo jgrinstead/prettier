@@ -1,5 +1,7 @@
 "use strict";
 
+const { isBlockComment, hasLeadingComment } = require("./comments");
+
 const {
   builders: {
     indent,
@@ -508,12 +510,9 @@ function hasLanguageComment(node, languageName) {
   // we will not trim the comment value and we will expect exactly one space on
   // either side of the GraphQL string
   // Also see ./clean.js
-  return (
-    node.leadingComments &&
-    node.leadingComments.some(
-      comment =>
-        comment.type === "CommentBlock" && comment.value === ` ${languageName} `
-    )
+  return hasLeadingComment(
+    node,
+    comment => isBlockComment(comment) && comment.value === ` ${languageName} `
   );
 }
 
@@ -567,9 +566,9 @@ function isHtml(path) {
 function printHtmlTemplateLiteral(path, print, textToDoc, parser) {
   const node = path.getValue();
 
-  const placeholderPattern = "PRETTIER_PLACEHOLDER_(\\d+)";
+  const placeholderPattern = "PRETTIER_HTML_PLACEHOLDER_(\\d+)_IN_JS";
   const placeholders = node.expressions.map(
-    (_, i) => `PRETTIER_PLACEHOLDER_${i}`
+    (_, i) => `PRETTIER_HTML_PLACEHOLDER_${i}_IN_JS`
   );
 
   const text = node.quasis
@@ -611,18 +610,8 @@ function printHtmlTemplateLiteral(path, print, textToDoc, parser) {
         }
 
         const placeholderIndex = +component;
-
         parts.push(
-          concat([
-            "${",
-            group(
-              concat([
-                indent(concat([softline, expressionDocs[placeholderIndex]])),
-                softline
-              ])
-            ),
-            "}"
-          ])
+          concat(["${", group(expressionDocs[placeholderIndex]), "}"])
         );
       }
 

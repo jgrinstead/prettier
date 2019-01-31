@@ -7,6 +7,31 @@ const {
 } = require("./constants.evaluate");
 const { getLast } = require("../common/util");
 
+const INLINE_NODE_TYPES = [
+  "liquidNode",
+  "inlineCode",
+  "emphasis",
+  "strong",
+  "delete",
+  "link",
+  "linkReference",
+  "image",
+  "imageReference",
+  "footnote",
+  "footnoteReference",
+  "sentence",
+  "whitespace",
+  "word",
+  "break",
+  "inlineMath"
+];
+
+const INLINE_NODE_WRAPPER_TYPES = INLINE_NODE_TYPES.concat([
+  "tableCell",
+  "paragraph",
+  "heading"
+]);
+
 const kRegex = new RegExp(kPattern);
 const punctuationRegex = new RegExp(punctuationPattern);
 
@@ -148,7 +173,7 @@ function getFencedCodeBlockValue(node, originalText) {
   const leadingSpaceCount = text.match(/^\s*/)[0].length;
   const replaceRegex = new RegExp(`^\\s{0,${leadingSpaceCount}}`);
 
-  const lineContents = text.replace(/\r\n?/g, "\n").split("\n");
+  const lineContents = text.split("\n");
 
   const markerStyle = text[leadingSpaceCount]; // ` or ~
   const marker = text
@@ -193,5 +218,7 @@ module.exports = {
   splitText,
   punctuationPattern,
   getFencedCodeBlockValue,
-  getOrderedListItemInfo
+  getOrderedListItemInfo,
+  INLINE_NODE_TYPES,
+  INLINE_NODE_WRAPPER_TYPES
 };

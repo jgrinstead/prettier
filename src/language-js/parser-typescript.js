@@ -36,14 +36,14 @@ function parse(text, parsers, opts) {
 }
 
 function tryParseTypeScript(text, jsx) {
-  const parser = require("typescript-estree");
+  const parser = require("@typescript-eslint/typescript-estree");
   return parser.parse(text, {
     loc: true,
     range: true,
     tokens: true,
     comment: true,
     useJSXTextNode: true,
-    ecmaFeatures: { jsx },
+    jsx,
     // Override logger function with noop,
     // to avoid unsupported version errors being logged
     loggerFn: () => {}

@@ -10,9 +10,17 @@ module.exports = [
   require("../language-js"),
   {
     parsers: {
-      // JS - Babylon
+      // JS - Babel
+      get babel() {
+        return eval("require")("../language-js/parser-babylon").parsers.babel;
+      },
+      get "babel-flow"() {
+        return eval("require")("../language-js/parser-babylon").parsers[
+          "babel-flow"
+        ];
+      },
       get babylon() {
-        return eval("require")("../language-js/parser-babylon").parsers.babylon;
+        return eval("require")("../language-js/parser-babylon").parsers.babel;
       },
       get json() {
         return eval("require")("../language-js/parser-babylon").parsers.json;
@@ -32,6 +40,10 @@ module.exports = [
       get __vue_expression() {
         return eval("require")("../language-js/parser-babylon").parsers
           .__vue_expression;
+      },
+      get __vue_event_binding() {
+        return eval("require")("../language-js/parser-babylon").parsers
+          .__vue_event_binding;
       },
       // JS - Flow
       get flow() {
